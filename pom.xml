@@ -20,7 +20,6 @@
 
   <properties>
     <java.version>25</java.version>
-    <maven.compiler.release>25</maven.compiler.release>
     <node.version>v24.20.0</node.version>
   </properties>
 
@@ -29,7 +28,8 @@
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-web</artifactId>
     </dependency>
-    <!-- Provided: supplied by an external Tomcat 10.1, yet still packaged so `java -jar` works -->
+    <!-- Provided scope: supplied by an external Tomcat 10.1 in a normal deploy;
+         Boot relocates it into WEB-INF/lib-provided so the executable WAR still boots. -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-tomcat</artifactId>

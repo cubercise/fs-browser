@@ -16,7 +16,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 /**
  * HTTP seam: the ping endpoint must prove the backend is live and report the
- * configured Root (set here from FSB_ROOT semantics to a temp directory).
+ * configured Root (FSB_ROOT pointed at a temp directory for the test).
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -27,7 +27,7 @@ class PingControllerTest {
 
     @DynamicPropertySource
     static void rootProperty(DynamicPropertyRegistry registry) {
-        registry.add("fsb.root", () -> root.toAbsolutePath().toString());
+        registry.add("FSB_ROOT", () -> root.toAbsolutePath().toString());
     }
 
     @Autowired
