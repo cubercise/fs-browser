@@ -7,7 +7,7 @@ import tailwindcss from '@tailwindcss/vite';
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   build: {
-    outDir: '../target/classes/static',
+    outDir: './target-frontend',
     emptyOutDir: true,
   },
   test: {

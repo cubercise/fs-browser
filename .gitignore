@@ -29,3 +29,5 @@ target/
 # Frontend
 node_modules/
 src/main/frontend/dist/
+src/main/frontend/target-frontend/
+src/main/frontend/node/
