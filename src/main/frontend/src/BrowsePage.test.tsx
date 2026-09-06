@@ -6,17 +6,20 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAppRouter } from './router';
-import { getTree, type Entry, type TreeResponse } from './api';
+import { downloadFile, getTree, getTextPreview, type Entry, type TreeResponse } from './api';
 
 // Frontend seam: the API client is mocked at its module edge so the real
 // component tree — router included (memory history) — runs without a backend.
 vi.mock('./api', async (importOriginal) => {
   const original = await importOriginal<typeof import('./api')>();
-  return { ...original, getTree: vi.fn() };
+  return { ...original, getTree: vi.fn(), getTextPreview: vi.fn(), downloadFile: vi.fn() };
 });
 
 const mockedGetTree = vi.mocked(getTree);
 const realApi = await vi.importActual<typeof import('./api')>('./api');
+
+const mockedGetTextPreview = vi.mocked(getTextPreview);
+const mockedDownloadFile = vi.mocked(downloadFile);
 
 // Seed listing: dirs before files is the server's contract; case-mixed
 // names prove the order survives the client side.
@@ -26,6 +29,7 @@ const FILES: Entry[] = [
   { name: 'apple.txt', kind: 'FILE', size: 1024, lastModified: 1735689600000 },
   { name: 'BANANA.md', kind: 'FILE', size: 5 * 1024 * 1024, lastModified: 1735689600000 },
   { name: 'cherry.png', kind: 'FILE', size: 7, lastModified: 1735689600000 },
+  { name: 'data.bin', kind: 'FILE', size: 256, lastModified: 1735689600000 },
 ];
 const ROOT_LISTING: TreeResponse = { path: '/srv/root', entries: [...DIRS, ...FILES] };
 const DOCS_LISTING: TreeResponse = { path: '/srv/root/Documents', entries: [] };
@@ -50,6 +54,8 @@ function renderApp(initialPath: string[] = ['/browse']) {
 
 beforeEach(() => {
   mockedGetTree.mockReset();
+  mockedGetTextPreview.mockReset();
+  mockedDownloadFile.mockReset();
   // Default mock is path-aware so navigation tests see the right listing.
   mockedGetTree.mockImplementation(async (path?: string) => treeFor(path ?? ''));
 });
@@ -68,7 +74,7 @@ describe('browse page (router seam)', () => {
     const order = ROOT_LISTING.entries.map((e) => screen.getByTestId(
       e.kind === 'DIR' ? `entry-link-${e.name}` : `entry-file-${e.name}`,
     ).compareDocumentPosition as unknown as number);
-    expect(order).toHaveLength(5);
+    expect(order).toHaveLength(6);
     // Sizes render human-readable.
     expect(screen.getByTestId('entry-file-apple.txt')).toHaveTextContent('1.0 KB');
     expect(screen.getByTestId('entry-file-BANANA.md')).toHaveTextContent('5.0 MB');
@@ -191,5 +197,80 @@ describe('browse page (router seam)', () => {
     await expect(realGetTree('/etc')).rejects.toThrow();
     await expect(realGetTree('a/../b')).rejects.toThrow();
     await expect(realGetTree('a\0b')).rejects.toThrow();
+  });
+});
+
+describe('file preview panel (api-client seam)', () => {
+  it('renders text content when a text entry is clicked', async () => {
+    mockedGetTextPreview.mockResolvedValue({ content: 'héllo wörld', truncated: false });
+    const user = userEvent.setup();
+    renderApp();
+
+    await user.click(await screen.findByTestId('entry-file-apple.txt'));
+
+    expect(await screen.findByTestId('preview-panel')).toBeInTheDocument();
+    expect(screen.getByTestId('preview-title')).toHaveTextContent('apple.txt');
+    expect(screen.getByTestId('preview-text')).toHaveTextContent('héllo wörld');
+    expect(screen.queryByTestId('preview-truncated')).not.toBeInTheDocument();
+    expect(mockedGetTextPreview).toHaveBeenCalledWith('apple.txt');
+  });
+
+  it('shows a truncation notice when the cap marker is set', async () => {
+    mockedGetTextPreview.mockResolvedValue({ content: 'x'.repeat(100), truncated: true });
+    const user = userEvent.setup();
+    renderApp();
+
+    await user.click(await screen.findByTestId('entry-file-apple.txt'));
+
+    expect(await screen.findByTestId('preview-truncated')).toBeInTheDocument();
+    expect(screen.getByTestId('preview-text')).toBeInTheDocument();
+  });
+
+  it('renders an image straight from the /api/file URL', async () => {
+    const user = userEvent.setup();
+    renderApp();
+
+    await user.click(await screen.findByTestId('entry-file-cherry.png'));
+
+    const img = await screen.findByTestId('preview-image');
+    expect(img).toBeInTheDocument();
+    expect(img.getAttribute('src')).toBe('/api/file?path=cherry.png');
+    expect(mockedGetTextPreview).not.toHaveBeenCalled();
+  });
+
+  it('downloads other kinds directly, without a panel', async () => {
+    const user = userEvent.setup();
+    renderApp();
+
+    await user.click(await screen.findByTestId('entry-download-data.bin'));
+
+    expect(mockedDownloadFile).toHaveBeenCalledWith('data.bin');
+    expect(screen.queryByTestId('preview-panel')).not.toBeInTheDocument();
+  });
+
+  it('closes the panel on Close', async () => {
+    mockedGetTextPreview.mockResolvedValue({ content: 'nested', truncated: false });
+    const user = userEvent.setup();
+    renderApp();
+
+    await user.click(await screen.findByTestId('entry-file-apple.txt'));
+    await screen.findByTestId('preview-text');
+    await user.click(screen.getByTestId('preview-close'));
+
+    await waitFor(() =>
+      expect(screen.queryByTestId('preview-panel')).not.toBeInTheDocument(),
+    );
+  });
+
+  it('offers a download action for every previewed file', async () => {
+    mockedGetTextPreview.mockResolvedValue({ content: 'body', truncated: false });
+    const user = userEvent.setup();
+    renderApp();
+
+    await user.click(await screen.findByTestId('entry-file-apple.txt'));
+    await screen.findByTestId('preview-text');
+    await user.click(screen.getByTestId('preview-download'));
+
+    expect(mockedDownloadFile).toHaveBeenCalledWith('apple.txt');
   });
 });

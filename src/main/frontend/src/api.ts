@@ -80,3 +80,53 @@ export async function getTree(path = ''): Promise<TreeResponse> {
   }
   return (await response.json()) as TreeResponse;
 }
+
+/** What /api/file serves for a given path (client mirror of its response shapes). */
+export type FileKind = 'TEXT' | 'IMAGE' | 'BINARY';
+
+export interface TextPreview {
+  content: string;
+  truncated: boolean;
+}
+
+/**
+ * Fetches a file for text preview: GET /api/file as text, surfacing the
+ * truncation marker. Same traversal-refusal discipline as getTree — the
+ * server's Sandbox stays the authority, this is the client's fence.
+ */
+export async function getTextPreview(path: string): Promise<TextPreview> {
+  if (!isSafeRelativePath(path)) {
+    throw new Error(`Refusing to request a traversal-shaped path: ${JSON.stringify(path)}`);
+  }
+  const response = await fetch(`/api/file?path=${encodeURIComponent(path)}`);
+  if (!response.ok) {
+    throw new Error(`file request failed: HTTP ${response.status}`);
+  }
+  return { content: await response.text(), truncated: response.headers.get('X-Fsb-Truncated') === 'true' };
+}
+
+/**
+ * URL for a file served by /api/file, encoded per segment. Used for image
+ * previews (<img src>) and downloads (anchor href) — a URL the browser
+ * fetches, not a client-fetched path string, so it does not go through
+ * isSafeRelativePath; the Sandbox still vets it server-side. (If the path
+ * were traversal-shaped the browser would merely receive a 400/404 image.)
+ */
+export function fileUrl(path: string): string {
+  return `/api/file?path=${encodeURIComponent(path)}`;
+}
+
+/**
+ * Triggers a browser download of a file through /api/file. Returns the
+ * constructed URL so tests can assert on it without a real anchor.
+ */
+export function downloadFile(path: string): string {
+  const url = fileUrl(path);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = '';
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  return url;
+}

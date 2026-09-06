@@ -2,10 +2,11 @@ import { useMemo, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { Breadcrumbs, Button, Spinner, SearchField } from '@heroui/react';
-import { Folder, File as FileIcon } from '@phosphor-icons/react';
+import { Folder, File as FileIcon, Download } from '@phosphor-icons/react';
 import { browseRoute } from './router';
-import { childPath, getTree, segments, type Entry } from './api';
+import { childPath, downloadFile, getTree, segments, type Entry, type FileKind } from './api';
 import { formatBytes, formatTimestamp } from './format';
+import FilePreview from './FilePreview';
 
 /**
  * The browse page: one directory per URL (`/browse?path=…`). The listing is
@@ -21,6 +22,7 @@ export default function BrowsePage() {
   });
 
   const [filter, setFilter] = useState('');
+  const [preview, setPreview] = useState<{ path: string; entry: Entry } | null>(null);
 
   const visible = useMemo(() => {
     const entries = query.data?.entries ?? [];
@@ -76,12 +78,38 @@ export default function BrowsePage() {
       ) : (
         <ul className="flex flex-col divide-y divide-default" data-testid="tree-entries">
           {visible.map((entry) => (
-            <EntryRow key={entry.name} entry={entry} path={path} />
+            <EntryRow key={entry.name} entry={entry} path={path} onOpenFile={setPreview} />
           ))}
         </ul>
       )}
+
+      {preview && (
+        <FilePreview
+          file={preview}
+          kind={previewKind(preview.entry)}
+          onClose={() => setPreview(null)}
+        />
+      )}
     </div>
   );
+}
+
+/**
+ * Which /api/file response shape an entry will get, predicted from the name
+ * the listing reported. Only a guess for UI routing (panel vs direct
+ * download): the backend sniffs content and stays authoritative — a .txt
+ * full of PNG bytes renders as an image, a .png of text as text.
+ */
+function previewKind(entry: Entry): FileKind {
+  const dot = entry.name.lastIndexOf('.');
+  const ext = dot === -1 ? '' : entry.name.slice(dot + 1).toLowerCase();
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) {
+    return 'IMAGE';
+  }
+  if (['txt', 'md', 'json', 'csv', 'log', 'xml', 'yml', 'yaml', 'ini', 'conf', 'html', 'css', 'js', 'ts'].includes(ext)) {
+    return 'TEXT';
+  }
+  return 'BINARY';
 }
 
 function PathBreadcrumbs({ path }: { path: string }) {
@@ -120,17 +148,42 @@ function PathBreadcrumbs({ path }: { path: string }) {
   );
 }
 
-function EntryRow({ entry, path }: { entry: Entry; path: string }) {
+function EntryRow({ entry, path, onOpenFile }: { entry: Entry; path: string; onOpenFile: (file: { path: string; entry: Entry }) => void }) {
   const navigate = useNavigate();
   // Client-side guard: only relative subpaths are ever turned into targets,
   // so no traversal-shaped href/request can be constructed here.
   const target = childPath(path, entry.name);
 
   if (entry.kind === 'FILE') {
+    const kind = previewKind(entry);
+    if (kind === 'BINARY') {
+      // Unknown/binary content: no preview exists, go straight to download.
+      return (
+        <li className="flex items-center gap-3 px-2 py-2" data-testid={`entry-file-${entry.name}`}>
+          <FileIcon aria-hidden className="text-muted" />
+          <EntryMeta entry={entry} />
+          <Button
+            variant="secondary"
+            aria-label={`Download ${entry.name}`}
+            data-testid={`entry-download-${entry.name}`}
+            onPress={() => downloadFile(target)}
+          >
+            <Download aria-hidden />
+          </Button>
+        </li>
+      );
+    }
     return (
-      <li className="flex items-center gap-3 px-2 py-2" data-testid={`entry-file-${entry.name}`}>
-        <FileIcon aria-hidden className="text-muted" />
-        <EntryMeta entry={entry} />
+      <li>
+        <button
+          type="button"
+          className="flex w-full cursor-pointer items-center gap-3 px-2 py-2 text-left hover:bg-default"
+          data-testid={`entry-file-${entry.name}`}
+          onClick={() => onOpenFile({ path: target, entry })}
+        >
+          <FileIcon aria-hidden className="text-muted" />
+          <EntryMeta entry={entry} />
+        </button>
       </li>
     );
   }
