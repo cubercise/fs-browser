@@ -6,13 +6,28 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAppRouter } from './router';
-import { downloadFile, getTree, getTextPreview, type Entry, type TreeResponse } from './api';
+import {
+  downloadFile,
+  getMode,
+  getTree,
+  getTextPreview,
+  uploadFile,
+  type Entry,
+  type TreeResponse,
+} from './api';
 
 // Frontend seam: the API client is mocked at its module edge so the real
 // component tree — router included (memory history) — runs without a backend.
 vi.mock('./api', async (importOriginal) => {
   const original = await importOriginal<typeof import('./api')>();
-  return { ...original, getTree: vi.fn(), getTextPreview: vi.fn(), downloadFile: vi.fn() };
+  return {
+    ...original,
+    getTree: vi.fn(),
+    getTextPreview: vi.fn(),
+    downloadFile: vi.fn(),
+    getMode: vi.fn(),
+    uploadFile: vi.fn(),
+  };
 });
 
 const mockedGetTree = vi.mocked(getTree);
@@ -20,6 +35,8 @@ const realApi = await vi.importActual<typeof import('./api')>('./api');
 
 const mockedGetTextPreview = vi.mocked(getTextPreview);
 const mockedDownloadFile = vi.mocked(downloadFile);
+const mockedGetMode = vi.mocked(getMode);
+const mockedUploadFile = vi.mocked(uploadFile);
 
 // Seed listing: dirs before files is the server's contract; case-mixed
 // names prove the order survives the client side.
@@ -56,8 +73,13 @@ beforeEach(() => {
   mockedGetTree.mockReset();
   mockedGetTextPreview.mockReset();
   mockedDownloadFile.mockReset();
+  mockedGetMode.mockReset();
+  mockedUploadFile.mockReset();
   // Default mock is path-aware so navigation tests see the right listing.
   mockedGetTree.mockImplementation(async (path?: string) => treeFor(path ?? ''));
+  // Default mode is read-only — the deployment default — so the existing
+  // tests' snapshots stay honest: no upload control anywhere.
+  mockedGetMode.mockResolvedValue({ mode: 'read-only' });
 });
 
 afterEach(cleanup);
@@ -272,5 +294,94 @@ describe('file preview panel (api-client seam)', () => {
     await user.click(screen.getByTestId('preview-download'));
 
     expect(mockedDownloadFile).toHaveBeenCalledWith('apple.txt');
+  });
+});
+
+describe('mode awareness + upload (router seam)', () => {
+  it('renders no upload control in read-only mode', async () => {
+    mockedGetMode.mockResolvedValue({ mode: 'read-only' });
+    renderApp();
+
+    await screen.findByTestId('tree-entries');
+
+    expect(screen.queryByTestId('upload-control')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('upload-button')).not.toBeInTheDocument();
+    expect(mockedGetMode).toHaveBeenCalled();
+  });
+
+  it('renders the upload control in read-write mode', async () => {
+    mockedGetMode.mockResolvedValue({ mode: 'read-write' });
+    renderApp();
+
+    expect(await screen.findByTestId('upload-control')).toBeInTheDocument();
+    expect(screen.getByTestId('upload-button')).toBeInTheDocument();
+    // Still the same listing, unaffected by the mode.
+    expect(await screen.findByTestId('tree-entries')).toBeInTheDocument();
+  });
+
+  it('uploads the picked file into the current directory and refreshes the listing', async () => {
+    mockedGetMode.mockResolvedValue({ mode: 'read-write' });
+    mockedUploadFile.mockImplementation(async (_path: string, file: File) => ({
+      name: file.name,
+      size: file.size,
+    }));
+    const user = userEvent.setup();
+    renderApp();
+
+    await screen.findByTestId('tree-entries');
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    expect(input).not.toBeNull();
+
+    const file = new File(['uploaded-bytes'], 'notes.md', { type: 'text/markdown' });
+    await user.upload(input, file);
+
+    await waitFor(() => expect(mockedUploadFile).toHaveBeenCalledWith('', file));
+    // Success invalidates the ['tree', path] query — the listing refetches.
+    await waitFor(() => expect(mockedGetTree).toHaveBeenCalledWith(''));
+    expect(screen.queryByTestId('upload-error')).not.toBeInTheDocument();
+  });
+
+  it('targets the current directory when browsing a subdirectory', async () => {
+    mockedGetMode.mockResolvedValue({ mode: 'read-write' });
+    mockedUploadFile.mockResolvedValue({ name: 'nested.txt', size: 3 });
+    const user = userEvent.setup();
+    renderApp();
+
+    await user.click(await screen.findByTestId('entry-link-Documents'));
+    await screen.findByTestId('tree-empty');
+
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File(['abc'], 'nested.txt');
+    await user.upload(input, file);
+
+    await waitFor(() => expect(mockedUploadFile).toHaveBeenCalledWith('Documents', file));
+  });
+
+  it('shows a visible error when the upload fails', async () => {
+    mockedGetMode.mockResolvedValue({ mode: 'read-write' });
+    mockedUploadFile.mockRejectedValue(
+      new Error("upload failed: HTTP 409: An Entry named 'apple.txt' already exists"),
+    );
+    const user = userEvent.setup();
+    renderApp();
+
+    await screen.findByTestId('tree-entries');
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File(['dup'], 'apple.txt');
+    await user.upload(input, file);
+
+    const alert = await screen.findByTestId('upload-error');
+    expect(alert).toHaveTextContent('Upload failed');
+    expect(alert).toHaveTextContent('409');
+    expect(alert).toHaveTextContent('already exists');
+  });
+
+  it('never builds an upload request for a traversal-shaped target', async () => {
+    // The client refuses before any fetch: same discipline as getTree.
+    const { uploadFile: realUpload } = realApi;
+    await expect(realUpload('../etc', new File(['x'], 'x'))).rejects.toThrow();
+    await expect(realUpload('a/../b', new File(['x'], 'x'))).rejects.toThrow();
+    await expect(realUpload('/abs', new File(['x'], 'x'))).rejects.toThrow();
+    expect(mockedUploadFile).not.toHaveBeenCalled();
   });
 });

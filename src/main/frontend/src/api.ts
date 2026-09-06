@@ -14,6 +14,62 @@ export async function ping(): Promise<PingResponse> {
   return (await response.json()) as PingResponse;
 }
 
+/** The deployment-wide permission switch, as reported by GET /api/mode. */
+export type AppMode = 'read-only' | 'read-write';
+
+export interface ModeResponse {
+  mode: AppMode;
+}
+
+/**
+ * Fetches the instance Mode once per app load: the UI uses it to decide
+ * whether write affordances exist at all (in read-only mode the upload
+ * control is absent, not disabled).
+ */
+export async function getMode(): Promise<ModeResponse> {
+  const response = await fetch('/api/mode');
+  if (!response.ok) {
+    throw new Error(`mode request failed: HTTP ${response.status}`);
+  }
+  return (await response.json()) as ModeResponse;
+}
+
+/** The stored Entry, as reported by a successful POST /api/upload. */
+export interface UploadResult {
+  name: string;
+  size: number;
+}
+
+/**
+ * Uploads one file into a directory of the Root via POST /api/upload
+ * (multipart). Same traversal-refusal discipline as getTree — the client
+ * refuses to even build the request for a pathy target; the server's
+ * Sandbox + write guard stay the authority. Errors carry the server's
+ * {"error": …} detail when present (409 duplicate name, 400 bad name, …).
+ */
+export async function uploadFile(path: string, file: File): Promise<UploadResult> {
+  if (!isSafeRelativePath(path)) {
+    throw new Error(`Refusing to upload to a traversal-shaped path: ${JSON.stringify(path)}`);
+  }
+  const body = new FormData();
+  body.append('file', file);
+  const query = path ? `?path=${encodeURIComponent(path)}` : '';
+  const response = await fetch(`/api/upload${query}`, { method: 'POST', body });
+  if (!response.ok) {
+    let detail = `HTTP ${response.status}`;
+    try {
+      const payload = (await response.json()) as { error?: string };
+      if (payload.error) {
+        detail = `${detail}: ${payload.error}`;
+      }
+    } catch {
+      // Body wasn't JSON — the status alone is the message.
+    }
+    throw new Error(`upload failed: ${detail}`);
+  }
+  return (await response.json()) as UploadResult;
+}
+
 export type EntryKind = 'DIR' | 'FILE';
 
 export interface Entry {

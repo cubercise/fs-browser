@@ -36,3 +36,30 @@ Environment variables (both overridable with `-e`):
 
 Liveness check: `curl http://localhost:8080/api/ping` answers with the
 configured Root, e.g. `{"pong":true,"root":"/data"}`.
+
+## Modes and writes
+
+fs-browser ships read-only: it browses the Root, nothing more. Setting
+`FSB_MODE=read-write` (environment variable, or the `FSB_MODE` Spring
+property) opts the instance into writes — currently exactly one:
+
+- `POST /api/upload?path=<target dir>` — multipart/form-data with a `file`
+  part. The part's filename must be a plain name (path-shaped, empty,
+  dot/dot-dot and null-byte names are rejected with 400 — no silent
+  basenaming); an existing Entry of the same name is never overwritten
+  (409); the target directory goes through the same Sandbox resolution as
+  every other path (traversal → 400, missing → 404). Success answers 201
+  with `{"name": …, "size": …}` of the stored Entry. One upload may not
+  exceed 100 MB (`spring.servlet.multipart.max-file-size` in
+  `src/main/resources/application.properties`; over-limit requests are
+  refused with 413 before anything is written).
+
+In read-only mode every write endpoint answers `403 {"error": …}` before
+looking at paths or bodies, and the SPA renders no write UI at all (no
+disabled buttons — the upload control simply does not exist). The SPA
+discovers the mode once per load via `GET /api/mode` →
+`{"mode":"read-only"}` or `{"mode":"read-write"}`.
+
+Any other `FSB_MODE` value fails startup with a message naming the two
+allowed spellings — a typo never degrades into an accidentally writable
+instance.

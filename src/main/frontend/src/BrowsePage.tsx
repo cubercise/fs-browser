@@ -4,15 +4,18 @@ import { useQuery } from '@tanstack/react-query';
 import { Breadcrumbs, Button, Spinner, SearchField } from '@heroui/react';
 import { Folder, File as FileIcon, Download } from '@phosphor-icons/react';
 import { browseRoute } from './router';
-import { childPath, downloadFile, getTree, segments, type Entry, type FileKind } from './api';
+import { childPath, downloadFile, getMode, getTree, segments, type Entry, type FileKind } from './api';
 import { formatBytes, formatTimestamp } from './format';
 import FilePreview from './FilePreview';
+import UploadControl from './UploadControl';
 
 /**
  * The browse page: one directory per URL (`/browse?path=…`). The listing is
  * fetched with TanStack Query keyed by the path; navigation happens through
  * the router only, with targets built exclusively from relative subpaths
- * (childPath refuses anything traversal-shaped).
+ * (childPath refuses anything traversal-shaped). The instance Mode is
+ * fetched once — in read-write mode the toolbar gains an upload control,
+ * in read-only mode no write UI exists at all.
  */
 export default function BrowsePage() {
   const { path = '' } = browseRoute.useSearch();
@@ -20,6 +23,12 @@ export default function BrowsePage() {
     queryKey: ['tree', path],
     queryFn: () => getTree(path),
   });
+  const modeQuery = useQuery({
+    queryKey: ['mode'],
+    queryFn: getMode,
+    staleTime: Infinity,
+  });
+  const writable = modeQuery.data?.mode === 'read-write';
 
   const [filter, setFilter] = useState('');
   const [preview, setPreview] = useState<{ path: string; entry: Entry } | null>(null);
@@ -42,19 +51,25 @@ export default function BrowsePage() {
 
       <PathBreadcrumbs path={path} />
 
-      <SearchField
-        name="filter"
-        aria-label="Filter by name"
-        variant="secondary"
-        value={filter}
-        onChange={setFilter}
-      >
-        <SearchField.Group>
-          <SearchField.SearchIcon />
-          <SearchField.Input placeholder="Filter by name…" />
-          <SearchField.ClearButton />
-        </SearchField.Group>
-      </SearchField>
+      <div className="flex items-start gap-2">
+        <div className="min-w-0 flex-1">
+          <SearchField
+            name="filter"
+            aria-label="Filter by name"
+            variant="secondary"
+            value={filter}
+            onChange={setFilter}
+          >
+            <SearchField.Group>
+              <SearchField.SearchIcon />
+              <SearchField.Input placeholder="Filter by name…" />
+              <SearchField.ClearButton />
+            </SearchField.Group>
+          </SearchField>
+        </div>
+        {/* Absent — not disabled — unless the instance is read-write. */}
+        {writable && <UploadControl path={path} />}
+      </div>
 
       {query.isPending ? (
         <div className="flex items-center gap-3 text-sm text-muted" data-testid="tree-loading">
