@@ -3,9 +3,12 @@ package io.cubercise.fsbrowser.storage;
 import io.cubercise.fsbrowser.sandbox.InvalidPathException;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.util.stream.Stream;
 import org.springframework.stereotype.Component;
 
 /**
@@ -58,6 +61,83 @@ public class EntryStore {
             throw new EntryConflictException("An Entry named '" + name + "' already exists");
         }
         return target;
+    }
+
+    /**
+     * Renames one Entry (file or directory — children move with a renamed
+     * directory, {@link Files#move} semantics) inside {@code dir}. The new
+     * name passes the same shape rules as an uploaded filename; an existing
+     * target is never overwritten ({@link EntryConflictException}). The move
+     * is attempted {@link StandardCopyOption#ATOMIC_MOVE atomic} first and
+     * falls back to a plain move when the filesystem does not support
+     * atomic moves (e.g. some network/overlay mounts) — the fallback still
+     * refuses to clobber, so the observable contract is unchanged.
+     *
+     * @return the renamed Entry's path
+     * @throws InvalidPathException   bad name shape for {@code from} or {@code to} (→ 400)
+     * @throws EntryNotFoundException no Entry named {@code from} in {@code dir} (→ 404)
+     * @throws EntryConflictException an Entry named {@code to} already exists (→ 409)
+     */
+    public Path rename(Path dir, String from, String to) throws IOException {
+        String sourceName = sanitizeFilename(from);
+        String targetName = sanitizeFilename(to);
+        Path source = dir.resolve(sourceName);
+        Path target = dir.resolve(targetName);
+        if (!target.getParent().equals(dir)) {
+            throw new InvalidPathException("Name must be a plain name, not a path: " + to);
+        }
+        if (!Files.exists(source)) {
+            throw new EntryNotFoundException("No Entry named '" + sourceName + "' in this directory");
+        }
+        if (Files.exists(target)) {
+            throw new EntryConflictException("An Entry named '" + targetName + "' already exists");
+        }
+        try {
+            Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
+        } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+            // Documented fallback: same directory, no REPLACE_EXISTING — a
+            // plain move is still all-or-nothing on the name and cannot
+            // overwrite. (Rethrows FileAlreadyExistsException as conflict below.)
+            Files.move(source, target);
+        } catch (FileAlreadyExistsException e) {
+            // Lost a race with a concurrent create/rename onto the same name.
+            throw new EntryConflictException("An Entry named '" + targetName + "' already exists");
+        }
+        return target;
+    }
+
+    /**
+     * Deletes one Entry (file or empty directory) inside {@code dir}.
+     *
+     * <p>v1 scope choice (documented in the README too): deleting a
+     * <em>non-empty</em> directory is refused with
+     * {@link EntryConflictException} rather than silently walking and
+     * removing the tree. Recursive delete is a dangerous default for a
+     * browser UI; the user empties the directory first, one visible step
+     * at a time. An empty directory deletes normally.
+     *
+     * @throws InvalidPathException   bad name shape (→ 400)
+     * @throws EntryNotFoundException no Entry named {@code name} in {@code dir} (→ 404)
+     * @throws EntryConflictException the Entry is a non-empty directory (→ 409)
+     */
+    public void delete(Path dir, String name) throws IOException {
+        String entryName = sanitizeFilename(name);
+        Path target = dir.resolve(entryName);
+        if (!target.getParent().equals(dir)) {
+            throw new InvalidPathException("Name must be a plain name, not a path: " + name);
+        }
+        if (!Files.exists(target)) {
+            throw new EntryNotFoundException("No Entry named '" + entryName + "' in this directory");
+        }
+        if (Files.isDirectory(target)) {
+            try (Stream<Path> children = Files.list(target)) {
+                if (children.findAny().isPresent()) {
+                    throw new EntryConflictException(
+                            "Directory '" + entryName + "' is not empty — empty it first (recursive delete is not supported)");
+                }
+            }
+        }
+        Files.delete(target);
     }
 
     /**

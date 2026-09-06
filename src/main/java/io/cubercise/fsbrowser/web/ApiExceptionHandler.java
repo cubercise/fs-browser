@@ -4,6 +4,7 @@ import io.cubercise.fsbrowser.mode.ReadOnlyException;
 import io.cubercise.fsbrowser.sandbox.InvalidPathException;
 import io.cubercise.fsbrowser.sandbox.PathNotFoundException;
 import io.cubercise.fsbrowser.storage.EntryConflictException;
+import io.cubercise.fsbrowser.storage.EntryNotFoundException;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -38,6 +39,16 @@ public class ApiExceptionHandler {
     @ExceptionHandler(EntryConflictException.class)
     ResponseEntity<Map<String, String>> entryConflict(EntryConflictException e) {
         return body(HttpStatus.CONFLICT, e.getMessage());
+    }
+
+    @ExceptionHandler(EntryNotFoundException.class)
+    ResponseEntity<Map<String, String>> entryNotFound(EntryNotFoundException e) {
+        return body(HttpStatus.NOT_FOUND, e.getMessage());
+    }
+
+    @ExceptionHandler(BlankMutationException.class)
+    ResponseEntity<Map<String, String>> blankMutation(BlankMutationException e) {
+        return body(HttpStatus.BAD_REQUEST, e.getMessage());
     }
 
     @ExceptionHandler(MissingServletRequestPartException.class)
