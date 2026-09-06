@@ -19,12 +19,13 @@ import org.springframework.stereotype.Service;
  *       is rejected ({@link InvalidPathException}).
  *   <li>{@link Files#realPath} (which follows symlinks) must still land inside
  *       the Root's real path — this is what defeats symlink escapes.
- *   <li>The real path must exist and be a directory, else
+ *   <li>The real path must exist; {@link #resolveDir(String)} then requires a
+ *       directory and {@link #resolveFile(String)} a regular file, else
  *       {@link PathNotFoundException}.
  * </ol>
  *
- * <p>Every later endpoint (file download/preview, mutations) reuses this
- * service; keep its API narrow on purpose.
+ * <p>Every endpoint (tree listing, file download/preview, later mutations)
+ * reuses this service; keep its API narrow on purpose.
  */
 @Service
 public class Sandbox {
@@ -44,11 +45,42 @@ public class Sandbox {
      * @param requestPath relative path as sent by the client; empty or null means the Root
      * @return the real, canonical directory Path to list
      * @throws InvalidPathException bad shape or traversal attempt (→ 400)
-     * @throws PathNotFoundException nothing (readable) there (→ 404)
+     * @throws PathNotFoundException nothing (readable) there, or not a directory (→ 404)
      */
     public Path resolveDir(String requestPath) {
+        Path real = resolveExistingContainedPath(requestPath);
+        if (!Files.isDirectory(real)) {
+            throw new PathNotFoundException("No such directory inside the Root: " + real);
+        }
+        return real;
+    }
+
+    /**
+     * Same containment chain as {@link #resolveDir(String)}, but the resolved
+     * path must be a regular file (symlinks to files inside the Root are
+     * fine, as they are for directories).
+     *
+     * @param requestPath relative path as sent by the client
+     * @return the real, canonical file Path to serve
+     * @throws InvalidPathException bad shape or traversal attempt (→ 400)
+     * @throws PathNotFoundException nothing there, or not a regular file (→ 404)
+     */
+    public Path resolveFile(String requestPath) {
+        Path real = resolveExistingContainedPath(requestPath);
+        if (!Files.isRegularFile(real)) {
+            throw new PathNotFoundException("No such file inside the Root: " + real);
+        }
+        return real;
+    }
+
+    /**
+     * The one containment chain both public resolvers share: null-byte
+     * rejection, Root-relative resolution (absolute input is rebased), lexical
+     * containment, then symlink-aware real-path containment. The caller adds
+     * the entry-type requirement.
+     */
+    private Path resolveExistingContainedPath(String requestPath) {
         if (requestPath == null || requestPath.isBlank()) {
-            requireDirectory(realRoot);
             return realRoot;
         }
         if (requestPath.indexOf('\0') >= 0) {
@@ -65,14 +97,7 @@ public class Sandbox {
         if (!isInsideReal(real)) {
             throw new InvalidPathException("Path resolves outside the Root (symlink?): " + requestPath);
         }
-        requireDirectory(real);
         return real;
-    }
-
-    private void requireDirectory(Path p) {
-        if (!Files.isDirectory(p)) {
-            throw new PathNotFoundException("No such directory inside the Root: " + p);
-        }
     }
 
     private boolean isInside(Path p) {
