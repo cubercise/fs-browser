@@ -1,0 +1,163 @@
+import { useMemo, useState } from 'react';
+import { useNavigate } from '@tanstack/react-router';
+import { useQuery } from '@tanstack/react-query';
+import { Breadcrumbs, Button, Spinner, SearchField } from '@heroui/react';
+import { Folder, File as FileIcon } from '@phosphor-icons/react';
+import { browseRoute } from './router';
+import { childPath, getTree, segments, type Entry } from './api';
+import { formatBytes, formatTimestamp } from './format';
+
+/**
+ * The browse page: one directory per URL (`/browse?path=…`). The listing is
+ * fetched with TanStack Query keyed by the path; navigation happens through
+ * the router only, with targets built exclusively from relative subpaths
+ * (childPath refuses anything traversal-shaped).
+ */
+export default function BrowsePage() {
+  const { path = '' } = browseRoute.useSearch();
+  const query = useQuery({
+    queryKey: ['tree', path],
+    queryFn: () => getTree(path),
+  });
+
+  const [filter, setFilter] = useState('');
+
+  const visible = useMemo(() => {
+    const entries = query.data?.entries ?? [];
+    const needle = filter.trim().toLowerCase();
+    return needle ? entries.filter((e) => e.name.toLowerCase().includes(needle)) : entries;
+  }, [query.data, filter]);
+
+  return (
+    <div className="mx-auto flex min-h-screen w-full max-w-3xl flex-col gap-4 px-4 py-6">
+      <header className="flex items-center justify-between">
+        <h1 className="text-xl font-bold">fs-browser</h1>
+        {/* Small liveness affordance; the /api/ping contract itself is untouched. */}
+        <a className="text-xs text-muted hover:underline" href="/api/ping" target="_blank" rel="noreferrer">
+          ping
+        </a>
+      </header>
+
+      <PathBreadcrumbs path={path} />
+
+      <SearchField
+        name="filter"
+        aria-label="Filter by name"
+        variant="secondary"
+        value={filter}
+        onChange={setFilter}
+      >
+        <SearchField.Group>
+          <SearchField.SearchIcon />
+          <SearchField.Input placeholder="Filter by name…" />
+          <SearchField.ClearButton />
+        </SearchField.Group>
+      </SearchField>
+
+      {query.isPending ? (
+        <div className="flex items-center gap-3 text-sm text-muted" data-testid="tree-loading">
+          <Spinner size="sm" aria-label="Loading directory" />
+          <span>Loading…</span>
+        </div>
+      ) : query.isError ? (
+        <div role="alert" className="flex flex-col items-start gap-3">
+          <p className="text-sm text-red-500">
+            Could not load {path === '' ? 'the Root' : `'${path}'`}:
+            {query.error instanceof Error ? ` ${query.error.message}` : ` ${String(query.error)}`}
+          </p>
+          <Button variant="secondary" onPress={() => void query.refetch()}>
+            Retry
+          </Button>
+        </div>
+      ) : visible.length === 0 ? (
+        <p className="text-sm text-muted" data-testid="tree-empty">
+          {filter ? 'No entries match the filter.' : 'This directory is empty.'}
+        </p>
+      ) : (
+        <ul className="flex flex-col divide-y divide-default" data-testid="tree-entries">
+          {visible.map((entry) => (
+            <EntryRow key={entry.name} entry={entry} path={path} />
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function PathBreadcrumbs({ path }: { path: string }) {
+  const navigate = useNavigate();
+  const crumbs = useMemo(() => {
+    const segs = segments(path);
+    return [
+      { label: 'root', path: '' },
+      ...segs.map((segment, i) => ({ label: segment, path: segs.slice(0, i + 1).join('/') })),
+    ];
+  }, [path]);
+
+  return (
+    <nav aria-label="Directory path">
+      <Breadcrumbs>
+        {crumbs.map((crumb, index) =>
+          index === crumbs.length - 1 ? (
+            <Breadcrumbs.Item key={crumb.path}>{crumb.label}</Breadcrumbs.Item>
+          ) : (
+            <Breadcrumbs.Item
+              key={crumb.path}
+              onPress={() =>
+                void navigate({
+                  to: '/browse',
+                  // Omit the param entirely at the Root so the URL is clean.
+                  search: crumb.path ? { path: crumb.path } : {},
+                })
+              }
+            >
+              {crumb.label}
+            </Breadcrumbs.Item>
+          ),
+        )}
+      </Breadcrumbs>
+    </nav>
+  );
+}
+
+function EntryRow({ entry, path }: { entry: Entry; path: string }) {
+  const navigate = useNavigate();
+  // Client-side guard: only relative subpaths are ever turned into targets,
+  // so no traversal-shaped href/request can be constructed here.
+  const target = childPath(path, entry.name);
+
+  if (entry.kind === 'FILE') {
+    return (
+      <li className="flex items-center gap-3 px-2 py-2" data-testid={`entry-file-${entry.name}`}>
+        <FileIcon aria-hidden className="text-muted" />
+        <EntryMeta entry={entry} />
+      </li>
+    );
+  }
+
+  return (
+    <li>
+      <button
+        type="button"
+        className="flex w-full cursor-pointer items-center gap-3 px-2 py-2 text-left hover:bg-default"
+        data-testid={`entry-link-${entry.name}`}
+        onClick={() => void navigate({ to: '/browse', search: { path: target } })}
+      >
+        <Folder aria-hidden className="text-accent" />
+        <EntryMeta entry={entry} />
+      </button>
+    </li>
+  );
+}
+
+function EntryMeta({ entry }: { entry: Entry }) {
+  return (
+    <>
+      <span className="truncate font-medium">{entry.name}</span>
+      <span className="ml-auto shrink-0 text-xs text-muted">{formatBytes(entry.size)}</span>
+      <span className="hidden shrink-0 text-xs text-muted sm:inline">
+        {formatTimestamp(entry.lastModified)}
+      </span>
+    </>
+  );
+}
