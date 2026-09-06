@@ -4,18 +4,28 @@ import { useQuery } from '@tanstack/react-query';
 import { Breadcrumbs, Button, Spinner, SearchField } from '@heroui/react';
 import { Folder, File as FileIcon, Download } from '@phosphor-icons/react';
 import { browseRoute } from './router';
-import { childPath, downloadFile, getMode, getTree, segments, type Entry, type FileKind } from './api';
+import {
+  childPath,
+  downloadFile,
+  getMode,
+  getTree,
+  segments,
+  type Entry,
+  type FileKind,
+} from './api';
 import { formatBytes, formatTimestamp } from './format';
 import FilePreview from './FilePreview';
 import UploadControl from './UploadControl';
+import EntryActions from './EntryActions';
 
 /**
  * The browse page: one directory per URL (`/browse?path=…`). The listing is
  * fetched with TanStack Query keyed by the path; navigation happens through
  * the router only, with targets built exclusively from relative subpaths
  * (childPath refuses anything traversal-shaped). The instance Mode is
- * fetched once — in read-write mode the toolbar gains an upload control,
- * in read-only mode no write UI exists at all.
+ * fetched once — in read-write mode the toolbar gains an upload control
+ * and each row gains a rename/delete actions menu, in read-only mode no
+ * write UI exists at all.
  */
 export default function BrowsePage() {
   const { path = '' } = browseRoute.useSearch();
@@ -93,7 +103,7 @@ export default function BrowsePage() {
       ) : (
         <ul className="flex flex-col divide-y divide-default" data-testid="tree-entries">
           {visible.map((entry) => (
-            <EntryRow key={entry.name} entry={entry} path={path} onOpenFile={setPreview} />
+            <EntryRow key={entry.name} entry={entry} path={path} onOpenFile={setPreview} writable={writable} />
           ))}
         </ul>
       )}
@@ -163,7 +173,17 @@ function PathBreadcrumbs({ path }: { path: string }) {
   );
 }
 
-function EntryRow({ entry, path, onOpenFile }: { entry: Entry; path: string; onOpenFile: (file: { path: string; entry: Entry }) => void }) {
+function EntryRow({
+  entry,
+  path,
+  onOpenFile,
+  writable,
+}: {
+  entry: Entry;
+  path: string;
+  onOpenFile: (file: { path: string; entry: Entry }) => void;
+  writable: boolean;
+}) {
   const navigate = useNavigate();
   // Client-side guard: only relative subpaths are ever turned into targets,
   // so no traversal-shaped href/request can be constructed here.
@@ -177,6 +197,7 @@ function EntryRow({ entry, path, onOpenFile }: { entry: Entry; path: string; onO
         <li className="flex items-center gap-3 px-2 py-2" data-testid={`entry-file-${entry.name}`}>
           <FileIcon aria-hidden className="text-muted" />
           <EntryMeta entry={entry} />
+          {writable && <EntryActions entry={entry} path={path} />}
           <Button
             variant="secondary"
             aria-label={`Download ${entry.name}`}
@@ -198,6 +219,7 @@ function EntryRow({ entry, path, onOpenFile }: { entry: Entry; path: string; onO
         >
           <FileIcon aria-hidden className="text-muted" />
           <EntryMeta entry={entry} />
+          {writable && <EntryActions entry={entry} path={path} />}
         </button>
       </li>
     );
@@ -205,15 +227,18 @@ function EntryRow({ entry, path, onOpenFile }: { entry: Entry; path: string; onO
 
   return (
     <li>
-      <button
-        type="button"
-        className="flex w-full cursor-pointer items-center gap-3 px-2 py-2 text-left hover:bg-default"
-        data-testid={`entry-link-${entry.name}`}
-        onClick={() => void navigate({ to: '/browse', search: { path: target } })}
-      >
-        <Folder aria-hidden className="text-accent" />
-        <EntryMeta entry={entry} />
-      </button>
+      <div className="flex items-center">
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 px-2 py-2 text-left hover:bg-default"
+          data-testid={`entry-link-${entry.name}`}
+          onClick={() => void navigate({ to: '/browse', search: { path: target } })}
+        >
+          <Folder aria-hidden className="text-accent" />
+          <EntryMeta entry={entry} />
+        </button>
+        {writable && <EntryActions entry={entry} path={path} />}
+      </div>
     </li>
   );
 }

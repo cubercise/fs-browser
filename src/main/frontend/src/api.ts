@@ -70,6 +70,78 @@ export async function uploadFile(path: string, file: File): Promise<UploadResult
   return (await response.json()) as UploadResult;
 }
 
+/**
+ * True when `name` is a plain Entry name — no path separator, no null
+ * byte — the client-side mirror of the fence around every write. The
+ * server's EntryStore stays the authority; this only stops the request
+ * from ever being built.
+ */
+export function isPlainEntryName(name: string): boolean {
+  return name !== '' && !name.includes('/') && !name.includes('\\') && !name.includes('\0');
+}
+
+/** The renamed Entry, as reported by a successful POST /api/rename. */
+export interface RenameResult {
+  name: string;
+}
+
+/**
+ * Renames one Entry (file or directory) inside a directory of the Root
+ * via POST /api/rename (JSON {"path": …, "from": …, "to": …}). Same
+ * traversal-refusal discipline as uploadFile — the client refuses to even
+ * build the request for a traversal-shaped directory or a pathy name; the
+ * server's Sandbox + EntryStore stay the authority. Errors carry the
+ * server's {"error": …} detail when present (409 duplicate target, 400
+ * bad name, 404 missing source, 403 read-only).
+ */
+export async function renameEntry(path: string, from: string, to: string): Promise<RenameResult> {
+  if (!isSafeRelativePath(path) || !isPlainEntryName(from) || !isPlainEntryName(to)) {
+    throw new Error(`Refusing to rename with a traversal-shaped path or name: ${JSON.stringify([path, from, to])}`);
+  }
+  const response = await fetch('/api/rename', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path, from, to }),
+  });
+  if (!response.ok) {
+    throw new Error(`rename failed: ${await errorDetail(response)}`);
+  }
+  return (await response.json()) as RenameResult;
+}
+
+/**
+ * Deletes one Entry (file or empty directory) from a directory of the
+ * Root via DELETE /api/file?path=…&name=…. Same fences as renameEntry;
+ * success is 204 (no body). Errors carry the server's {"error": …}
+ * detail when present (409 non-empty directory, 404 missing, 400 bad
+ * name, 403 read-only).
+ */
+export async function deleteEntry(path: string, name: string): Promise<void> {
+  if (!isSafeRelativePath(path) || !isPlainEntryName(name)) {
+    throw new Error(`Refusing to delete with a traversal-shaped path or name: ${JSON.stringify([path, name])}`);
+  }
+  const response = await fetch(`/api/file?path=${encodeURIComponent(path)}&name=${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok && response.status !== 204) {
+    throw new Error(`delete failed: ${await errorDetail(response)}`);
+  }
+}
+
+/** Extracts the server's {"error": …} body, falling back to the status. */
+async function errorDetail(response: Response): Promise<string> {
+  let detail = `HTTP ${response.status}`;
+  try {
+    const payload = (await response.json()) as { error?: string };
+    if (payload.error) {
+      detail = `${detail}: ${payload.error}`;
+    }
+  } catch {
+    // Body wasn't JSON — the status alone is the message.
+  }
+  return detail;
+}
+
 export type EntryKind = 'DIR' | 'FILE';
 
 export interface Entry {

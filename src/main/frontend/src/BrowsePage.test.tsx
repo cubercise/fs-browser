@@ -7,10 +7,12 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAppRouter } from './router';
 import {
+  deleteEntry,
   downloadFile,
   getMode,
   getTree,
   getTextPreview,
+  renameEntry,
   uploadFile,
   type Entry,
   type TreeResponse,
@@ -27,6 +29,8 @@ vi.mock('./api', async (importOriginal) => {
     downloadFile: vi.fn(),
     getMode: vi.fn(),
     uploadFile: vi.fn(),
+    renameEntry: vi.fn(),
+    deleteEntry: vi.fn(),
   };
 });
 
@@ -37,6 +41,8 @@ const mockedGetTextPreview = vi.mocked(getTextPreview);
 const mockedDownloadFile = vi.mocked(downloadFile);
 const mockedGetMode = vi.mocked(getMode);
 const mockedUploadFile = vi.mocked(uploadFile);
+const mockedRenameEntry = vi.mocked(renameEntry);
+const mockedDeleteEntry = vi.mocked(deleteEntry);
 
 // Seed listing: dirs before files is the server's contract; case-mixed
 // names prove the order survives the client side.
@@ -75,6 +81,8 @@ beforeEach(() => {
   mockedDownloadFile.mockReset();
   mockedGetMode.mockReset();
   mockedUploadFile.mockReset();
+  mockedRenameEntry.mockReset();
+  mockedDeleteEntry.mockReset();
   // Default mock is path-aware so navigation tests see the right listing.
   mockedGetTree.mockImplementation(async (path?: string) => treeFor(path ?? ''));
   // Default mode is read-only — the deployment default — so the existing
@@ -301,14 +309,12 @@ describe('mode awareness + upload (router seam)', () => {
   it('renders no upload control in read-only mode', async () => {
     mockedGetMode.mockResolvedValue({ mode: 'read-only' });
     renderApp();
-
     await screen.findByTestId('tree-entries');
 
     expect(screen.queryByTestId('upload-control')).not.toBeInTheDocument();
     expect(screen.queryByTestId('upload-button')).not.toBeInTheDocument();
     expect(mockedGetMode).toHaveBeenCalled();
   });
-
   it('renders the upload control in read-write mode', async () => {
     mockedGetMode.mockResolvedValue({ mode: 'read-write' });
     renderApp();
@@ -383,5 +389,199 @@ describe('mode awareness + upload (router seam)', () => {
     await expect(realUpload('a/../b', new File(['x'], 'x'))).rejects.toThrow();
     await expect(realUpload('/abs', new File(['x'], 'x'))).rejects.toThrow();
     expect(mockedUploadFile).not.toHaveBeenCalled();
+  });
+});
+
+describe('entry actions: rename + delete (router seam)', () => {
+  it('renders no entry action menus in read-only mode', async () => {
+    mockedGetMode.mockResolvedValue({ mode: 'read-only' });
+    renderApp();
+    await screen.findByTestId('tree-entries');
+
+    for (const entry of ROOT_LISTING.entries) {
+      expect(screen.queryByTestId(`entry-actions-${entry.name}`)).not.toBeInTheDocument();
+      expect(screen.queryByTestId(`entry-menu-${entry.name}`)).not.toBeInTheDocument();
+    }
+    expect(screen.queryByTestId('rename-dialog')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('delete-dialog')).not.toBeInTheDocument();
+  });
+
+  it('renders an actions menu for every entry in read-write mode', async () => {
+    mockedGetMode.mockResolvedValue({ mode: 'read-write' });
+    renderApp();
+    await screen.findByTestId('tree-entries');
+
+    for (const entry of ROOT_LISTING.entries) {
+      expect(screen.getByTestId(`entry-actions-${entry.name}`)).toBeInTheDocument();
+    }
+  });
+
+  it('opens the rename dialog with the entry name pre-filled and the submit gated', async () => {
+    mockedGetMode.mockResolvedValue({ mode: 'read-write' });
+    mockedRenameEntry.mockResolvedValue({ name: 'renamed.txt' });
+    const user = userEvent.setup();
+    renderApp();
+    await screen.findByTestId('tree-entries');
+
+    await user.click(screen.getByTestId('entry-menu-apple.txt'));
+    const renameItem = await screen.findByRole('menuitem', { name: 'Rename' });
+    await user.click(renameItem);
+
+    const input = await screen.findByTestId('rename-input');
+    expect(input).toHaveValue('apple.txt');
+    // Same name: submit is quiet — the server would only answer 409.
+    expect(screen.getByTestId('rename-submit')).toBeDisabled();
+  });
+
+  it('validates inline and refuses to call the api for a pathy rename', async () => {
+    mockedGetMode.mockResolvedValue({ mode: 'read-write' });
+    const user = userEvent.setup();
+    renderApp();
+    await screen.findByTestId('tree-entries');
+
+    await user.click(screen.getByTestId('entry-menu-apple.txt'));
+    await user.click(await screen.findByRole('menuitem', { name: 'Rename' }));
+    const input = await screen.findByTestId('rename-input');
+
+    await user.clear(input);
+    expect(await screen.findByTestId('rename-field-error')).toHaveTextContent('A name is required.');
+    expect(screen.getByTestId('rename-submit')).toBeDisabled();
+
+    await user.type(input, 'nested/name.txt');
+    expect(await screen.findByTestId('rename-field-error')).toHaveTextContent('must not contain "/"');
+    expect(screen.getByTestId('rename-submit')).toBeDisabled();
+
+    // The api client was never even called — validation blocked it client-side.
+    expect(mockedRenameEntry).not.toHaveBeenCalled();
+  });
+
+  it('renames through the api client and refreshes the listing on success', async () => {
+    mockedGetMode.mockResolvedValue({ mode: 'read-write' });
+    mockedRenameEntry.mockResolvedValue({ name: 'crab.txt' });
+    const user = userEvent.setup();
+    renderApp();
+    await screen.findByTestId('tree-entries');
+    const initialCalls = mockedGetTree.mock.calls.length;
+
+    await user.click(screen.getByTestId('entry-menu-apple.txt'));
+    await user.click(await screen.findByRole('menuitem', { name: 'Rename' }));
+    const input = await screen.findByTestId('rename-input');
+    await user.clear(input);
+    await user.type(input, 'crab.txt');
+    await user.click(screen.getByTestId('rename-submit'));
+
+    await waitFor(() => expect(mockedRenameEntry).toHaveBeenCalledWith('', 'apple.txt', 'crab.txt'));
+    // Success invalidates ['tree', path] — the listing refetches.
+    await waitFor(() => expect(mockedGetTree.mock.calls.length).toBeGreaterThan(initialCalls));
+    await waitFor(() => expect(screen.queryByTestId('rename-dialog')).not.toBeInTheDocument());
+  });
+
+  it('keeps the dialog open and surfaces the server error when rename fails', async () => {
+    mockedGetMode.mockResolvedValue({ mode: 'read-write' });
+    mockedRenameEntry.mockRejectedValue(
+      new Error("rename failed: HTTP 409: An Entry named 'BANANA.md' already exists"),
+    );
+    const user = userEvent.setup();
+    renderApp();
+    await screen.findByTestId('tree-entries');
+
+    await user.click(screen.getByTestId('entry-menu-apple.txt'));
+    await user.click(await screen.findByRole('menuitem', { name: 'Rename' }));
+    const input = await screen.findByTestId('rename-input');
+    await user.clear(input);
+    await user.type(input, 'BANANA.md');
+    await user.click(screen.getByTestId('rename-submit'));
+
+    const alert = await screen.findByTestId('rename-error');
+    expect(alert).toHaveTextContent('Rename failed');
+    expect(alert).toHaveTextContent('409');
+    expect(alert).toHaveTextContent('already exists');
+    expect(screen.getByTestId('rename-dialog')).toBeInTheDocument();
+  });
+
+  it('cancelling the rename closes the dialog and changes nothing', async () => {
+    mockedGetMode.mockResolvedValue({ mode: 'read-write' });
+    const user = userEvent.setup();
+    renderApp();
+    await screen.findByTestId('tree-entries');
+    const initialCalls = mockedGetTree.mock.calls.length;
+
+    await user.click(screen.getByTestId('entry-menu-apple.txt'));
+    await user.click(await screen.findByRole('menuitem', { name: 'Rename' }));
+    await screen.findByTestId('rename-input');
+    await user.click(screen.getByTestId('rename-cancel'));
+
+    await waitFor(() => expect(screen.queryByTestId('rename-dialog')).not.toBeInTheDocument());
+    expect(mockedRenameEntry).not.toHaveBeenCalled();
+    expect(mockedGetTree.mock.calls.length).toBe(initialCalls);
+  });
+
+  it('opens a delete confirmation that names the Entry, then deletes and refreshes', async () => {
+    mockedGetMode.mockResolvedValue({ mode: 'read-write' });
+    mockedDeleteEntry.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderApp();
+    await screen.findByTestId('tree-entries');
+    const initialCalls = mockedGetTree.mock.calls.length;
+
+    await user.click(screen.getByTestId('entry-menu-zeta'));
+    await user.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+
+    // The dialog explicitly names the Entry before anything happens.
+    const description = await screen.findByTestId('delete-description');
+    expect(description).toHaveTextContent('zeta');
+    expect(mockedDeleteEntry).not.toHaveBeenCalled();
+
+    await user.click(screen.getByTestId('delete-confirm'));
+    await waitFor(() => expect(mockedDeleteEntry).toHaveBeenCalledWith('', 'zeta'));
+    await waitFor(() => expect(mockedGetTree.mock.calls.length).toBeGreaterThan(initialCalls));
+    await waitFor(() => expect(screen.queryByTestId('delete-dialog')).not.toBeInTheDocument());
+  });
+
+  it('surfaces the non-empty-directory 409 from delete inside the dialog', async () => {
+    mockedGetMode.mockResolvedValue({ mode: 'read-write' });
+    mockedDeleteEntry.mockRejectedValue(
+      new Error("delete failed: HTTP 409: Directory 'Documents' is not empty"),
+    );
+    const user = userEvent.setup();
+    renderApp();
+    await screen.findByTestId('tree-entries');
+
+    await user.click(screen.getByTestId('entry-menu-Documents'));
+    await user.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    await user.click(await screen.findByTestId('delete-confirm'));
+
+    const alert = await screen.findByTestId('delete-error');
+    expect(alert).toHaveTextContent('Delete failed');
+    expect(alert).toHaveTextContent('not empty');
+    expect(screen.getByTestId('delete-dialog')).toBeInTheDocument();
+  });
+
+  it('cancelling the delete closes the dialog and deletes nothing', async () => {
+    mockedGetMode.mockResolvedValue({ mode: 'read-write' });
+    const user = userEvent.setup();
+    renderApp();
+    await screen.findByTestId('tree-entries');
+
+    await user.click(screen.getByTestId('entry-menu-zeta'));
+    await user.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    await screen.findByTestId('delete-description');
+    await user.click(screen.getByTestId('delete-cancel'));
+
+    await waitFor(() => expect(screen.queryByTestId('delete-dialog')).not.toBeInTheDocument());
+    expect(mockedDeleteEntry).not.toHaveBeenCalled();
+  });
+
+  it('never builds rename/delete requests for traversal-shaped input', async () => {
+    // The client refuses before any fetch: same discipline as uploadFile.
+    const { renameEntry: realRename, deleteEntry: realDelete } = realApi;
+    await expect(realRename('../etc', 'a', 'b')).rejects.toThrow();
+    await expect(realRename('a/../b', 'a', 'b')).rejects.toThrow();
+    await expect(realRename('', 'a/b', 'c')).rejects.toThrow();
+    await expect(realRename('', 'a', '../c')).rejects.toThrow();
+    await expect(realDelete('../etc', 'a')).rejects.toThrow();
+    await expect(realDelete('', 'a/b')).rejects.toThrow();
+    expect(mockedRenameEntry).not.toHaveBeenCalled();
+    expect(mockedDeleteEntry).not.toHaveBeenCalled();
   });
 });
