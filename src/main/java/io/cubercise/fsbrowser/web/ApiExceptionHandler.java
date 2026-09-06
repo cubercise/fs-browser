@@ -1,16 +1,21 @@
 package io.cubercise.fsbrowser.web;
 
+import io.cubercise.fsbrowser.mode.ReadOnlyException;
 import io.cubercise.fsbrowser.sandbox.InvalidPathException;
 import io.cubercise.fsbrowser.sandbox.PathNotFoundException;
+import io.cubercise.fsbrowser.storage.EntryConflictException;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 
 /**
- * One place translating Sandbox violations into HTTP: bad shape/traversal →
- * 400, missing target → 404. Controllers stay free of status codes.
+ * One place translating domain failures into HTTP: bad shape/traversal →
+ * 400, missing target → 404, write in read-only mode → 403, would-overwrite
+ * → 409, and missing upload part / non-multipart upload request → 400.
+ * Controllers stay free of status codes.
  */
 @RestControllerAdvice
 public class ApiExceptionHandler {
@@ -23,6 +28,21 @@ public class ApiExceptionHandler {
     @ExceptionHandler(PathNotFoundException.class)
     ResponseEntity<Map<String, String>> pathNotFound(PathNotFoundException e) {
         return body(HttpStatus.NOT_FOUND, e.getMessage());
+    }
+
+    @ExceptionHandler(ReadOnlyException.class)
+    ResponseEntity<Map<String, String>> readOnly(ReadOnlyException e) {
+        return body(HttpStatus.FORBIDDEN, e.getMessage());
+    }
+
+    @ExceptionHandler(EntryConflictException.class)
+    ResponseEntity<Map<String, String>> entryConflict(EntryConflictException e) {
+        return body(HttpStatus.CONFLICT, e.getMessage());
+    }
+
+    @ExceptionHandler(MissingServletRequestPartException.class)
+    ResponseEntity<Map<String, String>> missingPart(MissingServletRequestPartException e) {
+        return body(HttpStatus.BAD_REQUEST, "Expected multipart/form-data with a 'file' part");
     }
 
     private static ResponseEntity<Map<String, String>> body(HttpStatus status, String message) {
