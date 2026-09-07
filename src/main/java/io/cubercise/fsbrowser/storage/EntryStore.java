@@ -44,13 +44,7 @@ public class EntryStore {
      */
     public Path store(Path dir, String filename, InputStream content) throws IOException {
         String name = sanitizeFilename(filename);
-        Path target = dir.resolve(name).normalize();
-        // Belt and braces: the name passed every shape rule, so this cannot
-        // fire — but the invariant "a stored Entry sits directly in the
-        // given directory" is cheap to assert at the one write site.
-        if (!target.getParent().equals(dir)) {
-            throw new InvalidPathException("Filename must be a plain name, not a path: " + filename);
-        }
+        Path target = plainTarget(dir, name, filename);
         if (Files.exists(target)) {
             throw new EntryConflictException("An Entry named '" + name + "' already exists");
         }
@@ -82,10 +76,7 @@ public class EntryStore {
         String sourceName = sanitizeFilename(from);
         String targetName = sanitizeFilename(to);
         Path source = dir.resolve(sourceName);
-        Path target = dir.resolve(targetName);
-        if (!target.getParent().equals(dir)) {
-            throw new InvalidPathException("Name must be a plain name, not a path: " + to);
-        }
+        Path target = plainTarget(dir, targetName, to);
         if (!Files.exists(source)) {
             throw new EntryNotFoundException("No Entry named '" + sourceName + "' in this directory");
         }
@@ -122,10 +113,7 @@ public class EntryStore {
      */
     public void delete(Path dir, String name) throws IOException {
         String entryName = sanitizeFilename(name);
-        Path target = dir.resolve(entryName);
-        if (!target.getParent().equals(dir)) {
-            throw new InvalidPathException("Name must be a plain name, not a path: " + name);
-        }
+        Path target = plainTarget(dir, entryName, name);
         if (!Files.exists(target)) {
             throw new EntryNotFoundException("No Entry named '" + entryName + "' in this directory");
         }
@@ -138,6 +126,21 @@ public class EntryStore {
             }
         }
         Files.delete(target);
+    }
+
+    /**
+     * Resolves a sanitized name inside {@code dir} and asserts the invariant
+     * "an Entry target sits directly in the given directory". The name has
+     * already passed every shape rule, so the parent check cannot fire —
+     * but it is cheap, and it is the one place that would catch a future
+     * edit to {@link #sanitizeFilename} silently allowing pathy names.
+     */
+    private static Path plainTarget(Path dir, String name, String rawName) {
+        Path target = dir.resolve(name).normalize();
+        if (!target.getParent().equals(dir)) {
+            throw new InvalidPathException("Name must be a plain name, not a path: " + rawName);
+        }
+        return target;
     }
 
     /**

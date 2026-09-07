@@ -9,9 +9,9 @@ import {
   downloadFile,
   getMode,
   getTree,
+  predictFileKind,
   segments,
   type Entry,
-  type FileKind,
 } from './api';
 import { formatBytes, formatTimestamp } from './format';
 import FilePreview from './FilePreview';
@@ -111,30 +111,12 @@ export default function BrowsePage() {
       {preview && (
         <FilePreview
           file={preview}
-          kind={previewKind(preview.entry)}
+          kind={predictFileKind(preview.entry.name)}
           onClose={() => setPreview(null)}
         />
       )}
     </div>
   );
-}
-
-/**
- * Which /api/file response shape an entry will get, predicted from the name
- * the listing reported. Only a guess for UI routing (panel vs direct
- * download): the backend sniffs content and stays authoritative — a .txt
- * full of PNG bytes renders as an image, a .png of text as text.
- */
-function previewKind(entry: Entry): FileKind {
-  const dot = entry.name.lastIndexOf('.');
-  const ext = dot === -1 ? '' : entry.name.slice(dot + 1).toLowerCase();
-  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) {
-    return 'IMAGE';
-  }
-  if (['txt', 'md', 'json', 'csv', 'log', 'xml', 'yml', 'yaml', 'ini', 'conf', 'html', 'css', 'js', 'ts'].includes(ext)) {
-    return 'TEXT';
-  }
-  return 'BINARY';
 }
 
 function PathBreadcrumbs({ path }: { path: string }) {
@@ -190,7 +172,7 @@ function EntryRow({
   const target = childPath(path, entry.name);
 
   if (entry.kind === 'FILE') {
-    const kind = previewKind(entry);
+    const kind = predictFileKind(entry.name);
     if (kind === 'BINARY') {
       // Unknown/binary content: no preview exists, go straight to download.
       return (

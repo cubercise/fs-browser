@@ -7,7 +7,7 @@ import type { Entry } from './api';
 
 /**
  * The one preview panel: a HeroUI Modal whose body depends on the file kind
- * the backend's content sniffing reported — text renders in a scrollable
+ * the backend's content sniffing decides — text renders in a scrollable
  * <pre> (TanStack Query keyed by path, truncation surfaced as a notice plus
  * a download button), images render straight from the /api/file URL. A
  * download action is available for every file in the panel.
@@ -37,7 +37,11 @@ export default function FilePreview({
               <span className="shrink-0 text-xs text-muted">{formatBytes(entry.size)}</span>
             </Modal.Header>
             <Modal.Body>
-              {kind === 'IMAGE' ? <ImagePreview path={path} name={entry.name} /> : <TextPreviewBody path={path} />}
+              {kind === 'IMAGE' ? (
+                <ImagePreview path={path} name={entry.name} />
+              ) : (
+                <TextPreviewBody path={path} name={entry.name} />
+              )}
             </Modal.Body>
             <Modal.Footer>
               <Button variant="secondary" onPress={onClose} data-testid="preview-close">
@@ -56,7 +60,7 @@ export default function FilePreview({
 }
 
 /** Text body: fetched through the API client, cached per path. */
-function TextPreviewBody({ path }: { path: string }) {
+function TextPreviewBody({ path, name }: { path: string; name: string }) {
   const query = useQuery({
     queryKey: ['file-text', path],
     queryFn: () => getTextPreview(path),
@@ -83,7 +87,14 @@ function TextPreviewBody({ path }: { path: string }) {
       </div>
     );
   }
-  const { content, truncated } = query.data;
+  const { content, truncated, servedAsText } = query.data;
+  if (!servedAsText) {
+    // The server's sniff overruled the extension: this is not text (e.g. a
+    // .txt full of PNG bytes). Fall through to the image rendering — any
+    // non-text, non-image bytes still display as a broken <img>, which is
+    // honest, and the Download button below stays the way out.
+    return <ImagePreview path={path} name={name} />;
+  }
   return (
     <div className="flex min-w-0 flex-col gap-2">
       {truncated && (

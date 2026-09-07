@@ -232,7 +232,7 @@ describe('browse page (router seam)', () => {
 
 describe('file preview panel (api-client seam)', () => {
   it('renders text content when a text entry is clicked', async () => {
-    mockedGetTextPreview.mockResolvedValue({ content: 'héllo wörld', truncated: false });
+    mockedGetTextPreview.mockResolvedValue({ content: 'héllo wörld', truncated: false, servedAsText: true });
     const user = userEvent.setup();
     renderApp();
 
@@ -246,7 +246,7 @@ describe('file preview panel (api-client seam)', () => {
   });
 
   it('shows a truncation notice when the cap marker is set', async () => {
-    mockedGetTextPreview.mockResolvedValue({ content: 'x'.repeat(100), truncated: true });
+    mockedGetTextPreview.mockResolvedValue({ content: 'x'.repeat(100), truncated: true, servedAsText: true });
     const user = userEvent.setup();
     renderApp();
 
@@ -268,6 +268,20 @@ describe('file preview panel (api-client seam)', () => {
     expect(mockedGetTextPreview).not.toHaveBeenCalled();
   });
 
+  it('falls back to the image body when the server refuses to serve text', async () => {
+    // The extension predicted TEXT, but the backend's sniff overruled it:
+    // apple.txt is really a PNG. The panel must not render binary garbage.
+    mockedGetTextPreview.mockResolvedValue({ content: '', truncated: false, servedAsText: false });
+    const user = userEvent.setup();
+    renderApp();
+
+    await user.click(await screen.findByTestId('entry-file-apple.txt'));
+
+    const img = await screen.findByTestId('preview-image');
+    expect(img.getAttribute('src')).toBe('/api/file?path=apple.txt');
+    expect(screen.queryByTestId('preview-text')).not.toBeInTheDocument();
+  });
+
   it('downloads other kinds directly, without a panel', async () => {
     const user = userEvent.setup();
     renderApp();
@@ -279,7 +293,7 @@ describe('file preview panel (api-client seam)', () => {
   });
 
   it('closes the panel on Close', async () => {
-    mockedGetTextPreview.mockResolvedValue({ content: 'nested', truncated: false });
+    mockedGetTextPreview.mockResolvedValue({ content: 'nested', truncated: false, servedAsText: true });
     const user = userEvent.setup();
     renderApp();
 
@@ -293,7 +307,7 @@ describe('file preview panel (api-client seam)', () => {
   });
 
   it('offers a download action for every previewed file', async () => {
-    mockedGetTextPreview.mockResolvedValue({ content: 'body', truncated: false });
+    mockedGetTextPreview.mockResolvedValue({ content: 'body', truncated: false, servedAsText: true });
     const user = userEvent.setup();
     renderApp();
 

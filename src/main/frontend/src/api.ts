@@ -72,12 +72,37 @@ export async function uploadFile(path: string, file: File): Promise<UploadResult
 
 /**
  * True when `name` is a plain Entry name — no path separator, no null
- * byte — the client-side mirror of the fence around every write. The
- * server's EntryStore stays the authority; this only stops the request
- * from ever being built.
+ * byte, not a dot/dot-dot name — the client-side mirror of the fence
+ * around every write. The server's EntryStore stays the authority; this
+ * only stops the request from ever being built.
  */
 export function isPlainEntryName(name: string): boolean {
-  return name !== '' && !name.includes('/') && !name.includes('\\') && !name.includes('\0');
+  return name !== '' && name !== '.' && name !== '..' && !name.includes('/') && !name.includes('\\') && !name.includes('\0');
+}
+
+/**
+ * Extension-based prediction of what /api/file will serve, used ONLY to
+ * route the UI (open the preview panel vs download directly). The
+ * backend's content sniffing stays the authority for what is actually
+ * served — a mispredicted kind corrects itself in the panel, which
+ * consults the served Content-Type (see getTextPreview).
+ */
+const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'] as const;
+const TEXT_EXTENSIONS = [
+  'txt', 'md', 'json', 'csv', 'log', 'xml', 'yml', 'yaml', 'ini', 'conf', 'html', 'css', 'js', 'ts',
+] as const;
+
+/** The predicted FileKind for an Entry name (UI routing hint, not authority). */
+export function predictFileKind(name: string): FileKind {
+  const dot = name.lastIndexOf('.');
+  const ext = dot === -1 ? '' : name.slice(dot + 1).toLowerCase();
+  if ((IMAGE_EXTENSIONS as readonly string[]).includes(ext)) {
+    return 'IMAGE';
+  }
+  if ((TEXT_EXTENSIONS as readonly string[]).includes(ext)) {
+    return 'TEXT';
+  }
+  return 'BINARY';
 }
 
 /** The renamed Entry, as reported by a successful POST /api/rename. */
@@ -123,7 +148,7 @@ export async function deleteEntry(path: string, name: string): Promise<void> {
   const response = await fetch(`/api/file?path=${encodeURIComponent(path)}&name=${encodeURIComponent(name)}`, {
     method: 'DELETE',
   });
-  if (!response.ok && response.status !== 204) {
+  if (!response.ok) {
     throw new Error(`delete failed: ${await errorDetail(response)}`);
   }
 }
@@ -215,12 +240,23 @@ export type FileKind = 'TEXT' | 'IMAGE' | 'BINARY';
 export interface TextPreview {
   content: string;
   truncated: boolean;
+  /**
+   * False when the server's sniff refused to serve this as text (e.g. a
+   * .txt that is really a PNG) — `content` is then empty and the UI must
+   * not render it; the panel falls back to image/download handling.
+   */
+  servedAsText: boolean;
 }
 
 /**
  * Fetches a file for text preview: GET /api/file as text, surfacing the
- * truncation marker. Same traversal-refusal discipline as getTree — the
- * server's Sandbox stays the authority, this is the client's fence.
+ * truncation marker — and the served Content-Type, because the backend's
+ * content sniffing is the authority on what a file really is. A .txt full
+ * of PNG bytes comes back as image/png, and this client reports
+ * `served: false` so the UI can fall through to image/download handling
+ * instead of rendering binary garbage in a <pre>. Same traversal-refusal
+ * discipline as getTree — the server's Sandbox stays the authority, this
+ * is the client's fence.
  */
 export async function getTextPreview(path: string): Promise<TextPreview> {
   if (!isSafeRelativePath(path)) {
@@ -230,7 +266,13 @@ export async function getTextPreview(path: string): Promise<TextPreview> {
   if (!response.ok) {
     throw new Error(`file request failed: HTTP ${response.status}`);
   }
-  return { content: await response.text(), truncated: response.headers.get('X-Fsb-Truncated') === 'true' };
+  const contentType = (response.headers.get('Content-Type') ?? '').toLowerCase();
+  const servedAsText = contentType.startsWith('text/');
+  return {
+    content: servedAsText ? await response.text() : '',
+    truncated: response.headers.get('X-Fsb-Truncated') === 'true',
+    servedAsText,
+  };
 }
 
 /**
