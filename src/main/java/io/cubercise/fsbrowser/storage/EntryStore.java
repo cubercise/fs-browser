@@ -98,18 +98,14 @@ public class EntryStore {
     }
 
     /**
-     * Deletes one Entry (file or empty directory) inside {@code dir}.
-     *
-     * <p>v1 scope choice (documented in the README too): deleting a
-     * <em>non-empty</em> directory is refused with
-     * {@link EntryConflictException} rather than silently walking and
-     * removing the tree. Recursive delete is a dangerous default for a
-     * browser UI; the user empties the directory first, one visible step
-     * at a time. An empty directory deletes normally.
+     * Deletes one Entry (file or directory) inside {@code dir}. Deleting a
+     * directory removes its contents too — the walk is depth-first and the
+     * whole tree goes (developer decision on the v1 PR: a browser UI that
+     * refuses non-empty directories just moves the busywork onto the user;
+     * the explicit confirmation dialog on the client is the safety gate).
      *
      * @throws InvalidPathException   bad name shape (→ 400)
      * @throws EntryNotFoundException no Entry named {@code name} in {@code dir} (→ 404)
-     * @throws EntryConflictException the Entry is a non-empty directory (→ 409)
      */
     public void delete(Path dir, String name) throws IOException {
         String entryName = sanitizeFilename(name);
@@ -118,14 +114,21 @@ public class EntryStore {
             throw new EntryNotFoundException("No Entry named '" + entryName + "' in this directory");
         }
         if (Files.isDirectory(target)) {
-            try (Stream<Path> children = Files.list(target)) {
-                if (children.findAny().isPresent()) {
-                    throw new EntryConflictException(
-                            "Directory '" + entryName + "' is not empty — empty it first (recursive delete is not supported)");
-                }
-            }
+            deleteTree(target);
         }
         Files.delete(target);
+    }
+
+    /** Depth-first removal of everything under {@code dir} (not dir itself). */
+    private static void deleteTree(Path dir) throws IOException {
+        try (Stream<Path> children = Files.list(dir)) {
+            for (Path child : children.toList()) {
+                if (Files.isDirectory(child)) {
+                    deleteTree(child);
+                }
+                Files.delete(child);
+            }
+        }
     }
 
     /**

@@ -266,7 +266,7 @@ function DeleteDialog({ entry, path, onClose }: { entry: Entry; path: string; on
               <p data-testid="delete-description">
                 This will permanently delete the {entry.kind === 'DIR' ? 'directory' : 'file'}{' '}
                 <strong>{entry.name}</strong>
-                {entry.kind === 'DIR' ? ' (only if it is empty)' : ''}. This action cannot be undone.
+                {entry.kind === 'DIR' ? ' and everything inside it' : ''}. This action cannot be undone.
               </p>
               {error && (
                 <Alert status="danger" className="mt-2" data-testid="delete-error">

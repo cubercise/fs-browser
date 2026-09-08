@@ -67,12 +67,12 @@ property) opts the instance into writes — currently three:
   it does not. Success answers 200 with `{"name": "<new name>"}`.
 
 - `DELETE /api/file?path=<dir>&name=<entry>` — deletes one Entry. Files
-  and empty directories delete (204, empty body); a **non-empty directory
-  is refused with 409** — v1 does no recursive delete, by choice: the user
-  empties a directory explicitly, one visible step at a time, instead of a
-  browser click silently walking a tree. Same rules otherwise: `name`
-  passes the EntryStore shape checks (400), missing Entry → 404, missing
-  or blank `name` → 400, traversal parent → 400.
+  delete directly; **deleting a directory removes its contents too**
+  (depth-first walk, then the directory itself) — 204, empty body. The
+  client's confirmation dialog is the safety gate: it names the Entry and
+  states that a directory's contents go with it. Same rules otherwise:
+  `name` passes the EntryStore shape checks (400), missing Entry → 404,
+  missing or blank `name` → 400, traversal parent → 400.
 
 In read-only mode every write endpoint answers `403 {"error": …}` before
 looking at paths or bodies, and the SPA renders no write UI at all (no

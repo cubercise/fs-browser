@@ -75,17 +75,19 @@ class DeleteReadWriteTest {
     }
 
     @Test
-    void deletingANonEmptyDirectoryIsConflict() throws Exception {
-        Files.createDirectories(root.resolve("full"));
+    void deletingANonEmptyDirectoryRemovesTheWholeTree() throws Exception {
+        Files.createDirectories(root.resolve("full/nested/deeper"));
         Files.writeString(root.resolve("full/keep.txt"), "kept");
+        Files.writeString(root.resolve("full/nested/mid.txt"), "mid");
+        Files.writeString(root.resolve("full/nested/deeper/leaf.txt"), "leaf");
 
         mockMvc.perform(deleteEntry("", "full"))
-                .andExpect(status().isConflict())
-                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.error").isNotEmpty());
+                .andExpect(status().isNoContent());
 
-        // Directory and its content survived.
-        assertThat(root.resolve("full/keep.txt")).hasContent("kept");
-        assertThat(root.resolve("full")).isDirectory();
+        assertThat(root.resolve("full")).doesNotExist();
+        assertThat(root.resolve("full/keep.txt")).doesNotExist();
+        assertThat(root.resolve("full/nested/mid.txt")).doesNotExist();
+        assertThat(root.resolve("full/nested/deeper/leaf.txt")).doesNotExist();
     }
 
     @Test

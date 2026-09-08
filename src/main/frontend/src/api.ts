@@ -135,11 +135,11 @@ export async function renameEntry(path: string, from: string, to: string): Promi
 }
 
 /**
- * Deletes one Entry (file or empty directory) from a directory of the
- * Root via DELETE /api/file?path=…&name=…. Same fences as renameEntry;
- * success is 204 (no body). Errors carry the server's {"error": …}
- * detail when present (409 non-empty directory, 404 missing, 400 bad
- * name, 403 read-only).
+ * Deletes one Entry (file or directory — a directory's contents go with
+ * it) from a directory of the Root via DELETE /api/file?path=…&name=….
+ * Same fences as renameEntry; success is 204 (no body). Errors carry the
+ * server's {"error": …} detail when present (404 missing, 400 bad name,
+ * 403 read-only).
  */
 export async function deleteEntry(path: string, name: string): Promise<void> {
   if (!isSafeRelativePath(path) || !isPlainEntryName(name)) {
